@@ -5,6 +5,10 @@ const vueNextCompiler = require('vue-template-es2015-compiler');
 const babelCore = require('babel-core');
 const findBabelConfig = require('find-babel-config');
 const tsc = require('typescript');
+const sourceMap = require('source-map');
+const hash = require('hash-sum');
+
+const splitRE = /\r?\n/g;
 
 const transformBabel = src => {
   const { config } = findBabelConfig.sync(process.cwd());
@@ -97,6 +101,7 @@ module.exports = {
     // heavily based on vueify (Copyright (c) 2014-2016 Evan You)
     const { script, template } = vueCompiler.parseComponent(src, { pad: true });
     const transformedScript = script ? transforms[script.lang || 'babel'](script.content) : '';
+    //
     let render;
     let staticRenderFns;
     if (template) {
@@ -106,6 +111,44 @@ module.exports = {
       staticRenderFns = stringifyStaticRender(res.staticRenderFns);
     }
 
-    return generateOutput(transformedScript, render, staticRenderFns);
+    const code = generateOutput(transformedScript, render, staticRenderFns);
+    const map = generateSourceMap(script.content, code, filePath, src);
+
+    return {
+      code,
+      map
+    }
   },
 };
+
+generateSourceMap = (script, output, filePath, content) => {
+  // hot-reload source map busting
+  var hashedFilename = path.basename(filePath)// + '?' + hash(filePath + content)
+  var map = new sourceMap.SourceMapGenerator()
+  map.setSourceContent(hashedFilename, content)
+  // check input source map from babel/coffee etc
+  var inMap = null
+  var inMapConsumer = inMap && new sourceMap.SourceMapConsumer(inMap)
+  var generatedOffset = (output ? output.split(splitRE).length : 0) + 1
+  script.split(splitRE).forEach(function (line, index) {
+    var ln = index + 1
+    var originalLine = inMapConsumer
+      ? inMapConsumer.originalPositionFor({ line: ln, column: 0 }).line
+      : ln
+    if (originalLine) {
+      map.addMapping({
+        source: hashedFilename,
+        generated: {
+          line: ln + generatedOffset,
+          column: 0
+        },
+        original: {
+          line: originalLine,
+          column: 0
+        }
+      })
+    }
+  })
+ // map._hashedFilename = hashedFilename
+  return map
+}
